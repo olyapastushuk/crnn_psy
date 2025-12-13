@@ -1,12 +1,10 @@
 import os
 import pandas as pd
-from sklearn.model_selection import train_test_split
 
-# шлях до RAVDESS
-AUDIO_DIR = "audio"
+AUDIO_TRAIN = "audio/audio_train"
+AUDIO_VAL = "audio/audio_val"
 OUT_DIR = "data"
 
-# мапа емоцій -> VA
 emo2va = {
     "01": [0.0, 0.1],   # neutral
     "02": [0.2, 0.2],   # calm
@@ -18,19 +16,26 @@ emo2va = {
     "08": [0.3, 0.7],   # surprise
 }
 
-rows = []
+def collect_rows(audio_dir):
+    rows = []
+    for root, _, files in os.walk(audio_dir):
+        for f in files:
+            if f.endswith(".wav"):
+                parts = f.split("-")
+                emo_code = parts[2]
+                val, aro = emo2va[emo_code]
+                path = os.path.join(root, f)
+                rows.append([path, val, aro])
+    return rows
 
-for root, _, files in os.walk(AUDIO_DIR):
-    for f in files:
-        if f.endswith(".wav"):
-            parts = f.split("-")
-            emo_code = parts[2]  # третій елемент = емоція
-            val, aro = emo2va[emo_code]
-            path = os.path.join(root, f)
-            rows.append([path, val, aro])
+# зібрати окремо train і val
+train_rows = collect_rows(AUDIO_TRAIN)
+val_rows = collect_rows(AUDIO_VAL)
 
-# розбивка на train/val
-train, val = train_test_split(rows, test_size=0.2, random_state=42)
-
-pd.DataFrame(train, columns=["path","valence","arousal"]).to_csv(os.path.join(OUT_DIR,"labels_train.csv"), index=False)
-pd.DataFrame(val, columns=["path","valence","arousal"]).to_csv(os.path.join(OUT_DIR,"labels_val.csv"), index=False)
+# зберегти CSV
+pd.DataFrame(train_rows, columns=["path","valence","arousal"]).to_csv(
+    os.path.join(OUT_DIR, "labels_train.csv"), index=False
+)
+pd.DataFrame(val_rows, columns=["path","valence","arousal"]).to_csv(
+    os.path.join(OUT_DIR, "labels_val.csv"), index=False
+)
