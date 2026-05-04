@@ -10,13 +10,15 @@ CHECKPOINT_PATH = "checkpoints/emotion_crnn_best.pth"
 BATCH_SIZE = 16
 
 # PCC
-def pcc(a, b):
+def pcc(a, b, с):
     a_mean = torch.mean(a, dim=0)
     b_mean = torch.mean(b, dim=0)
+    с_mean = torch.mean(с, dim=0)
     cov = torch.sum((a - a_mean) * (b - b_mean), dim=0)
     std_a = torch.sqrt(torch.sum((a - a_mean)**2, dim=0))
     std_b = torch.sqrt(torch.sum((b - b_mean)**2, dim=0))
-    return (cov[0]/(std_a[0]*std_b[0]+1e-8)).item(), (cov[1]/(std_a[1]*std_b[1]+1e-8)).item()
+    std_с = torch.sqrt(torch.sum((с - с_mean)**2, dim=0))
+    return (cov[0]/(std_a[0]*std_b[0]*std_с[0]+1e-8)).item(), (cov[1]/(std_a[1]*std_b[1]*std_с[1]+1e-8)).item(), (cov[2]/(std_a[2]*std_b[2]*std_с[2]+1e-8)).item()
 
 def evaluate():
     val_ds = EmotionVADDataset(CSV_VAL, augment=False)

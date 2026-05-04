@@ -23,22 +23,6 @@ def time_stretch(audio, rate=1.0):
         return librosa.effects.time_stretch(audio, rate)
     except Exception:
         return audio
-    
-
-def augment_audio(y, sr):
-    # 1. Додаємо випадковий білий шум
-    noise_amp = 0.005 * np.random.uniform() * np.amax(y)
-    y = y + noise_amp * np.random.normal(size=y.shape[0])
-
-    # 2. Pitch shift (+/- 1 півтону)
-    pitch_change = np.random.uniform(-1, 1)
-    y = librosa.effects.pitch_shift(y, sr, n_steps=pitch_change)
-
-    # 3. Speed/tempo shift (+/- 10%)
-    speed_change = np.random.uniform(0.9, 1.1)
-    y = librosa.effects.time_stretch(y, speed_change)
-
-    return y
 
 class EmotionVADDataset(data.Dataset):
     """Dataset that returns mel-spectrograms and valence/arousal targets.
@@ -63,7 +47,7 @@ class EmotionVADDataset(data.Dataset):
             audio = np.mean(audio, axis=1)
         # pad/crop
         if len(audio) < self.samples:
-            audio = np.pad(audio, (0, self.samples - len(audio)))
+            audio = np.pad(audio, (0, max(0, self.samples - len(audio))))
         else:
             audio = audio[:self.samples]
         return audio
@@ -72,6 +56,7 @@ class EmotionVADDataset(data.Dataset):
         mel = librosa.feature.melspectrogram(y=audio, sr=self.sr, n_mels=self.n_mels,
                                              n_fft=1024, hop_length=256, power=2.0)
         mel_db = librosa.power_to_db(mel, ref=np.max)
+        mel_db = (mel_db - mel_db.min()) / (mel_db.max() - mel_db.min() + 1e-8)
         return mel_db.astype(np.float32)
 
     def __getitem__(self, idx):
@@ -79,6 +64,7 @@ class EmotionVADDataset(data.Dataset):
         path = row['path']
         valence = float(row['valence'])
         arousal = float(row['arousal'])
+        dominance = float(row['dominance'])
 
         audio = self.load_audio(path)
 
@@ -103,5 +89,5 @@ class EmotionVADDataset(data.Dataset):
 
         mel = self.compute_mel(audio)
         mel = torch.tensor(mel).unsqueeze(0)  # (1, n_mels, time)
-        target = torch.tensor([valence, arousal], dtype=torch.float32)
+        target = torch.tensor([valence, arousal, dominance], dtype=torch.float32)
         return mel, target

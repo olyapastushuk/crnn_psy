@@ -1,41 +1,115 @@
 import os
 import pandas as pd
+import soundfile as sf
+import librosa
+import io
+from datasets import load_dataset, concatenate_datasets, Audio
 
-AUDIO_TRAIN = "audio/audio_train"
-AUDIO_VAL = "audio/audio_val"
+# 1. Налаштування шляхів
+BASE_AUDIO_DIR = "audio"
 OUT_DIR = "data"
 
-emo2va = {
-    "01": [0.0, 0.1],   # neutral
-    "02": [0.2, 0.2],   # calm
-    "03": [0.8, 0.6],   # happy
-    "04": [-0.6, -0.3], # sad
-    "05": [-0.7, 0.8],  # angry
-    "06": [-0.8, 0.9],  # fear
-    "07": [-0.6, 0.5],  # disgust
-    "08": [0.3, 0.7],   # surprise
+for p in [BASE_AUDIO_DIR, OUT_DIR, 
+          os.path.join(BASE_AUDIO_DIR, "audio_train"), 
+          os.path.join(BASE_AUDIO_DIR, "audio_val")]:
+    os.makedirs(p, exist_ok=True)
+
+# 2. Словник VAD
+emo2vad = {
+    "happiness": [ 0.81,  0.51,  0.46],
+    "pride":     [ 0.60,  0.45,  0.85],
+    "interest":  [ 0.50,  0.25,  0.20],
+    "surprise":  [ 0.40,  0.67, -0.13],
+    "neutral":   [ 0.00,  0.00,  0.00],
+    "boredom":   [-0.15, -0.65, -0.25],
+    "anxiety":   [-0.35,  0.55, -0.45],
+    "contempt":  [-0.20,  0.30,  0.70],
+    "guilt":     [-0.45,  0.30, -0.40],
+    "shame":     [-0.55,  0.10, -0.55],
+    "anger":     [-0.51,  0.59,  0.25],
+    "disgust":   [-0.60,  0.35,  0.11],
+    "sadness":   [-0.63, -0.27, -0.33],
+    "fear":      [-0.64,  0.60, -0.43],
 }
 
-def collect_rows(audio_dir):
+CAMEO_EMOTIONS = [
+    "anger", "disgust", "fear", "happiness", "sadness", "surprise", "neutral",
+    "contempt", "pride", "shame", "guilt", "boredom", "anxiety", "interest"
+]
+
+def get_data():
+    print("--- Етап 1: Завантаження датасету CAMEO ---")
+    try:
+        # Завантажуємо без параметрів, які викликають помилку
+        ds_dict = load_dataset("amu-cai/CAMEO")
+        
+        # Об'єднуємо корпуси
+        full_ds = concatenate_datasets([ds_dict[k] for k in ds_dict.keys()])
+        
+        # ВАЖЛИВИЙ МОМЕНТ: Вимикаємо декодування аудіо через cast_column
+        # Це замінює decode_audio=False і не викликає помилку конфігурації
+        full_ds = full_ds.cast_column("audio", Audio(decode=False))
+        
+        print(f"Успішно зібрано {len(full_ds)} записів.")
+        return full_ds.train_test_split(test_size=0.1, seed=42)
+    except Exception as e:
+        print(f"Помилка завантаження: {e}")
+        return None
+
+def save_data(dataset_split, subdir_name):
+    print(f"\n--- Етап 2: Обробка {subdir_name} ---")
     rows = []
-    for root, _, files in os.walk(audio_dir):
-        for f in files:
-            if f.endswith(".wav"):
-                parts = f.split("-")
-                emo_code = parts[2]
-                val, aro = emo2va[emo_code]
-                path = os.path.join(root, f)
-                rows.append([path, val, aro])
+    
+    for i, item in enumerate(dataset_split):
+        try:
+            # 1. Отримуємо емоцію (вона вже приходить як рядок, напр. 'happiness')
+            emo_raw = item['emotion']
+            emo_name = str(emo_raw).lower().strip()
+            
+            # Перевіряємо, чи є ця емоція в нашому VAD-словнику
+            if emo_name not in emo2vad:
+                continue
+                
+            v, a, d = emo2vad[emo_name]
+            
+            # 2. Шлях для збереження
+            filename = f"{i}_{emo_name}.wav"
+            target_subdir = f"audio_{subdir_name}"
+            full_path = os.path.join(BASE_AUDIO_DIR, target_subdir, filename)
+            
+            # 3. Отримуємо аудіо-контент
+            # Оскільки ми вимкнули decode, беремо сирі байти
+            audio_bytes = item['audio']['bytes']
+            
+            # 4. Декодуємо через librosa та зберігаємо
+            y, sr = librosa.load(io.BytesIO(audio_bytes), sr=16000)
+            sf.write(full_path, y, sr)
+            
+            rows.append([full_path, v, a, d])
+            
+        except Exception as e:
+            if i == 0:
+                print(f"DEBUG Помилка на індексі {i}: {e}")
+            continue
+            
+        if i % 500 == 0 and i > 0:
+            print(f"Прогрес [{subdir_name}]: {i} файлів оброблено... (в списку вже {len(rows)})")
+            
     return rows
 
-# зібрати окремо train і val
-train_rows = collect_rows(AUDIO_TRAIN)
-val_rows = collect_rows(AUDIO_VAL)
+def main():
+    split_ds = get_data()
+    if not split_ds:
+        return
 
-# зберегти CSV
-pd.DataFrame(train_rows, columns=["path","valence","arousal"]).to_csv(
-    os.path.join(OUT_DIR, "labels_train.csv"), index=False
-)
-pd.DataFrame(val_rows, columns=["path","valence","arousal"]).to_csv(
-    os.path.join(OUT_DIR, "labels_val.csv"), index=False
-)
+    train_rows = save_data(split_ds['train'], "train")
+    val_rows = save_data(split_ds['test'], "val")
+
+    print("\n--- Етап 3: Запис CSV ---")
+    cols = ["path", "valence", "arousal", "dominance"]
+    pd.DataFrame(train_rows, columns=cols).to_csv("data/labels_train.csv", index=False)
+    pd.DataFrame(val_rows, columns=cols).to_csv("data/labels_val.csv", index=False)
+    print(f"Готово! Оброблено всього {len(train_rows) + len(val_rows)} файлів.")
+
+if __name__ == "__main__":
+    main()

@@ -20,7 +20,7 @@ class ResidualCNNBlock(nn.Module):
             else nn.Identity()
         )
 
-        self.pool = nn.MaxPool2d(2) if pool else nn.Identity()
+        self.pool = nn.MaxPool2d(kernel_size=(2, 1)) if pool else nn.Identity()
 
     def forward(self, x):
         identity = self.shortcut(x)
@@ -55,7 +55,7 @@ class SelfAttention(nn.Module):
 
 
 class EmotionCRNN(nn.Module):
-    def __init__(self, num_outputs=2):
+    def __init__(self, num_outputs=3):
         super().__init__()
         self.cnn = nn.Sequential(
             ResidualCNNBlock(1, 32),      # -> (32, H/2, W/2)
@@ -72,7 +72,7 @@ class EmotionCRNN(nn.Module):
             dropout=0.3,
             bidirectional=True,
         )
-        self.attention = SelfAttention(hidden_dim=512)
+        self.attention = nn.MultiheadAttention(embed_dim=512, num_heads=8, batch_first=True)
         self.fc = nn.Sequential(
             nn.Linear(512, 256),
             nn.ReLU(),
@@ -84,9 +84,9 @@ class EmotionCRNN(nn.Module):
         """     x shape: [batch, 1, mel_bins, time]     """
         x = self.cnn(x)  # [B, C, H, T]
         B, C, H, T = x.shape
-        x = x.mean(dim=2).transpose(1, 2)
+        x = x.permute(0, 3, 1, 2).reshape(B, T, C * H)
         rnn_out, _ = self.gru(x)  # [B, T, 512]
-        attn_out = self.attention(rnn_out)
+        attn_out = self.attention(rnn_out, rnn_out, rnn_out)[0]  # [B, T, 512]
         out = attn_out.mean(dim=1)  # [B, 512]
         out = self.fc(out)
         return out
