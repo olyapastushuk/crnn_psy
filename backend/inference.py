@@ -4,89 +4,100 @@ import librosa
 import numpy as np
 import torch.nn as nn
 import webrtcvad
-from backend.model import EmotionCRNN  # Імпортуємо вашу архітектуру
+from model import EmotionCRNN
 
 class EmotionPredictor:
     def __init__(self, checkpoint_path, device=None):
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         
-        # Параметри аудіо з вашого файлу dataset.py[cite: 1]
+        # Параметри аудіо з вашого файлу dataset.py
         self.sr = 16000
         self.n_mels = 128
         self.duration = 4.0
         self.samples = int(self.sr * self.duration)
         
-        # Ініціалізація VAD (агресивність 3 — найвища точність відсікання шуму)
+        # Ініціалізація VAD
         self.vad = webrtcvad.Vad(3)
         
-        # Ініціалізація моделі та завантаження ваг[cite: 1, 2]
+        # Ініціалізація моделі та завантаження ваг
         self.model = EmotionCRNN(num_outputs=3).to(self.device)
-        self.model.load_state_dict(torch.load(checkpoint_path, map_location=self.device))
+        # Додано weights_only=True для безпеки в нових версіях Torch
+        checkpoint = torch.load(checkpoint_path, map_location=self.device, weights_only=True)
+        self.model.load_state_dict(checkpoint)
         self.model.eval()
 
-    def is_speech_present(self, audio_path):
-        """Перевіряє, чи є людський голос у файлі (VAD)"""
-        # VAD працює тільки з частотою 16000 Гц[cite: 1]
-        audio, _ = librosa.load(audio_path, sr=16000)
-        
-        # Конвертація у 16-бітний формат (вимога webrtcvad)
+    def is_speech_present(self, audio):
+        """Перевіряє наявність голосу в уже завантаженому масиві"""
+        # Конвертація у 16-бітний формат
         audio_int16 = (audio * 32767).astype(np.int16)
         
-        # Розбиваємо на фрейми по 30мс
-        samples_per_frame = int(16000 * 0.03) 
+        samples_per_frame = int(self.sr * 0.03) # 30ms
         speech_frames = 0
         total_frames = 0
         
         for i in range(0, len(audio_int16) - samples_per_frame, samples_per_frame):
             frame = audio_int16[i:i + samples_per_frame]
-            if self.vad.is_speech(frame.tobytes(), 16000):
+            if self.vad.is_speech(frame.tobytes(), self.sr):
                 speech_frames += 1
             total_frames += 1
         
-        # Якщо менше 10% запису містить голос — вважаємо це шумом
-        return (speech_frames / total_frames) > 0.1
+        return (speech_frames / total_frames) > 0.1 if total_frames > 0 else False
 
-    def _load_and_preprocess(self, path):
-        """Відтворює логіку з EmotionVADDataset[cite: 1]"""
-        # 1. Завантаження та перетворення в моно[cite: 1]
-        audio, _ = librosa.load(path, sr=self.sr)
-        if audio.ndim > 1:
-            audio = np.mean(audio, axis=1)
-            
-        # 2. Pad/Crop до 4 секунд[cite: 1]
+    def _preprocess_audio(self, audio):
+        """Професійна підготовка аудіо для уникнення помилок 'Angry'"""
+        # 1. Нормалізація гучності (Критично!) 
+        # Це прибирає піки, які нейронка сприймає як крик/гнів
+        if np.max(np.abs(audio)) > 0:
+            audio = librosa.util.normalize(audio)
+
+        # 2. Видалення пауз (Trim)
+        audio, _ = librosa.effects.trim(audio, top_db=20)
+
+        # 3. Доведення до фіксованої довжини
         if len(audio) < self.samples:
             audio = np.pad(audio, (0, self.samples - len(audio)))
         else:
             audio = audio[:self.samples]
             
-        # 3. Обчислення Мел-спектрограми[cite: 1]
+        # 4. Створення Мел-спектрограми
         mel = librosa.feature.melspectrogram(
             y=audio, sr=self.sr, n_mels=self.n_mels,
             n_fft=1024, hop_length=256, power=2.0
         )
+        
+        # 5. Логарифмічне перетворення з фіксованим діапазоном
         mel_db = librosa.power_to_db(mel, ref=np.max).astype(np.float32)
         
-        # 4. Перетворення в тензор [1, 1, n_mels, time][cite: 1]
+        # Стандартизація значень (Mean/Std) - допомагає стабілізувати передбачення
+        mel_db = (mel_db - np.mean(mel_db)) / (np.std(mel_db) + 1e-6)
+
         mel_tensor = torch.tensor(mel_db).unsqueeze(0).unsqueeze(0)
         return mel_tensor.to(self.device)
 
     def predict(self, audio_path):
-        """Повертає VAD координати або помилку, якщо голосу немає[cite: 1, 2]"""
-        
+        """Основний метод передбачення емоцій"""
+        # Завантажуємо аудіо один раз
+        audio, _ = librosa.load(audio_path, sr=self.sr)
+
         # Спершу перевіряємо наявність голосу
-        if not self.is_speech_present(audio_path):
+        if not self.is_speech_present(audio):
             return {
                 "error": "no_speech",
-                "interpretation": "Голосу не виявлено (тиша або шум)",
+                "interpretation": "Тиша або шум",
                 "valence": 0.0, "arousal": 0.0, "dominance": 0.0
             }
 
-        mel = self._load_and_preprocess(audio_path)
+        # Препроцесинг
+        mel = self._preprocess_audio(audio)
         
         with torch.no_grad():
             output = self.model(mel)
-            # Отримуємо значення [valence, arousal, dominance][cite: 1, 2]
             v, a, d = output[0].cpu().numpy()
+            
+            # Обмеження значень в діапазоні [-1, 1] для стабільності інтерпретації
+            v = np.clip(v, -1.0, 1.0)
+            a = np.clip(a, -1.0, 1.0)
+            d = np.clip(d, -1.0, 1.0)
             
         return {
             "valence": float(v),
@@ -96,7 +107,7 @@ class EmotionPredictor:
         }
 
     def _interpret_vad(self, v, a, d):
-        """Пошук найближчої емоції за Евклідовою відстанню"""
+        """Евклідова відстань до еталонних емоцій"""
         emo2vad = {
             "Радість (Happiness)": [0.81, 0.51, 0.46],
             "Гордість (Pride)": [0.60, 0.45, 0.85],

@@ -25,11 +25,6 @@ def time_stretch(audio, rate=1.0):
         return audio
 
 class EmotionVADDataset(data.Dataset):
-    """Dataset that returns mel-spectrograms and valence/arousal/dominance targets.
-
-    Expected CSV format: path,valence,arousal,dominance
-    """
-
     def __init__(self, csv_path, sr=16000, n_mels=128, duration=4.0, augment=False):
         self.df = pd.read_csv(csv_path)
         self.sr = sr

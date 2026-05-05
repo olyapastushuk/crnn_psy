@@ -10,13 +10,11 @@ import bgImage from './assets/background.png';
 
 function App() {
   const [session, setSession] = useState(null);
-  const [view, setView] = useState('recorder'); // 'recorder', 'dashboard', 'statistics' або 'profile'
+  const [view, setView] = useState('recorder');
 
   useEffect(() => {
-    // Отримуємо поточну сесію при завантаженні
     supabase.auth.getSession().then(({ data: { session } }) => setSession(session));
     
-    // Слухаємо зміни стану авторизації (вхід/вихід)
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       setSession(session);
     });
@@ -24,7 +22,6 @@ function App() {
     return () => subscription.unsubscribe();
   }, []);
 
-  // Функція для стилізації активних/неактивних кнопок навігації
   const navButtonStyle = (isActive) => ({
     background: isActive ? theme.colors.primary : 'transparent',
     color: isActive ? theme.colors.primaryDark : 'white',
@@ -39,45 +36,74 @@ function App() {
   if (!session) return <Auth />;
 
   return (
-    <div className="App" style={{ minHeight: '100vh', backgroundImage: `url(${bgImage})`, ...theme.backgroundConfig, color: 'white' }}>
+    <div className="App" style={{ 
+      minHeight: '100vh', 
+      backgroundImage: `url(${bgImage})`, 
+      ...theme.backgroundConfig, 
+      color: 'white' 
+    }}>
       {/* Навігаційна панель */}
       <nav style={{ 
-        padding: '20px', 
+        padding: '15px 30px', 
         display: 'flex', 
-        justifyContent: 'center', 
-        flexWrap: 'wrap', // Щоб кнопки не "вилізали" на мобільних
-        gap: '15px', 
+        alignItems: 'center', 
+        justifyContent: 'space-between', 
         background: theme.colors.buttonCard,
-        boxShadow: '0 4px 15px rgba(0,0,0,0.2)' 
+        boxShadow: '0 4px 15px rgba(0,0,0,0.2)',
+        position: 'relative',
+        zIndex: 10
       }}>
-        <button 
-          onClick={() => setView('recorder')} 
-          style={navButtonStyle(view === 'recorder')}
-        >
-          Записати
-        </button>
         
-        <button 
-          onClick={() => setView('dashboard')} 
-          style={navButtonStyle(view === 'dashboard')}
-        >
-          Мої записи
-        </button>
+        {/* Назва сайту зліва */}
+        <div style={{ 
+          fontSize: '30px', 
+          fontWeight: 'bold', 
+          color: theme.colors.primary,
+          letterSpacing: '0.5px',
+          whiteSpace: 'nowrap'
+        }}>
+          Помічник для емоцій
+        </div>
 
-        <button 
-          onClick={() => setView('statistics')} 
-          style={navButtonStyle(view === 'statistics')}
-        >
-          Статистика
-        </button>
+        {/* Контейнер кнопок по центру */}
+        <div style={{ 
+          display: 'flex', 
+          gap: '12px', 
+          position: 'absolute', 
+          left: '50%', 
+          transform: 'translateX(-50%)',
+          flexWrap: 'nowrap'
+        }}>
+          <button 
+            onClick={() => setView('recorder')} 
+            style={navButtonStyle(view === 'recorder')}
+          >
+            Записати
+          </button>
+          
+          <button 
+            onClick={() => setView('dashboard')} 
+            style={navButtonStyle(view === 'dashboard')}
+          >
+            Мої записи
+          </button>
 
-        <button 
-          onClick={() => setView('profile')} 
-          style={navButtonStyle(view === 'profile')}
-        >
-          Профіль
-        </button>
+          <button 
+            onClick={() => setView('statistics')} 
+            style={navButtonStyle(view === 'statistics')}
+          >
+            Статистика
+          </button>
 
+          <button 
+            onClick={() => setView('profile')} 
+            style={navButtonStyle(view === 'profile')}
+          >
+            Профіль
+          </button>
+        </div>
+
+        {/* Кнопка виходу справа */}
         <button 
           onClick={() => supabase.auth.signOut()} 
           style={{ 
@@ -87,15 +113,18 @@ function App() {
             padding: '8px 20px', 
             borderRadius: '20px', 
             cursor: 'pointer',
-            marginLeft: '10px'
+            fontWeight: '500',
+            transition: 'opacity 0.2s'
           }}
+          onMouseOver={(e) => e.target.style.opacity = '0.9'}
+          onMouseOut={(e) => e.target.style.opacity = '1'}
         >
           Вийти
         </button>
       </nav>
 
-      {/* Контент сторінок залежно від обраної вкладки */}
-      <main style={{ padding: '20px' }}>
+      {/* Контент сторінок */}
+      <main style={{ padding: '40px 20px', position: 'relative' }}>
         {view === 'recorder' && <EmotionRecorder user={session.user} />}
         {view === 'dashboard' && <Dashboard user={session.user} />}
         {view === 'statistics' && <Statistics user={session.user} />}

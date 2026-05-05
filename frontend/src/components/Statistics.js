@@ -60,10 +60,10 @@ const Statistics = () => {
 
       {/* ГРАФІК */}
       <div style={{ background: theme.colors.card, padding: '30px 20px 20px 10px', borderRadius: '24px', height: '400px', boxShadow: '0 10px 30px rgba(0,0,0,0.3)' }}>
-        <h4 style={{ marginLeft: '40px', marginBottom: '20px', display: 'flex', alignItems: 'center', gap: '10px' }}>
+        <h4 style={{ color: theme.colors.textDark, marginLeft: '40px', marginBottom: '20px', display: 'flex', alignItems: 'center', gap: '10px' }}>
           <Activity size={18} color="#4ade80" /> Динаміка станів по датах
         </h4>
-        <ResponsiveContainer width="100%" height="100%">
+        <ResponsiveContainer width="95%" height="80%">
           <LineChart data={data}>
             <CartesianGrid strokeDasharray="3 3" stroke="#334155" vertical={false} />
             <XAxis dataKey="date" stroke="#94a3b8" fontSize={12} tickMargin={10} />

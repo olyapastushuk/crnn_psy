@@ -3,7 +3,7 @@ import uuid
 import shutil
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from backend.inference import EmotionPredictor 
+from inference import EmotionPredictor 
 
 # 1. Ініціалізація додатка
 app = FastAPI(title="EmotionCRNN VAD Analyzer API")
