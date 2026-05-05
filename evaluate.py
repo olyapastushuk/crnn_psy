@@ -2,7 +2,7 @@ import torch
 from torch.utils.data import DataLoader
 import matplotlib.pyplot as plt
 from dataset import EmotionVADDataset
-from model import EmotionCRNN
+from backend.model import EmotionCRNN
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 CSV_VAL = "data/labels_val.csv"
