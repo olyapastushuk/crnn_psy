@@ -16,7 +16,7 @@ def time_shift(audio, shift_max=0.2):
     return np.roll(audio, shift)
 
 def pitch_shift(audio, sr, n_steps=2):
-    return librosa.effects.pitch_shift(audio, sr, n_steps=n_steps)
+    return librosa.effects.pitch_shift(audio, sr=sr, n_steps=n_steps)
 
 def time_stretch(audio, rate=1.0):
     try:
@@ -25,9 +25,9 @@ def time_stretch(audio, rate=1.0):
         return audio
 
 class EmotionVADDataset(data.Dataset):
-    """Dataset that returns mel-spectrograms and valence/arousal targets.
+    """Dataset that returns mel-spectrograms and valence/arousal/dominance targets.
 
-    Expected CSV format: path,valence,arousal
+    Expected CSV format: path,valence,arousal,dominance
     """
 
     def __init__(self, csv_path, sr=16000, n_mels=128, duration=4.0, augment=False):
@@ -47,17 +47,21 @@ class EmotionVADDataset(data.Dataset):
             audio = np.mean(audio, axis=1)
         # pad/crop
         if len(audio) < self.samples:
-            audio = np.pad(audio, (0, max(0, self.samples - len(audio))))
+            audio = np.pad(audio, (0, self.samples - len(audio)), mode='constant')
         else:
             audio = audio[:self.samples]
         return audio
 
     def compute_mel(self, audio):
         mel = librosa.feature.melspectrogram(y=audio, sr=self.sr, n_mels=self.n_mels,
-                                             n_fft=1024, hop_length=256, power=2.0)
-        mel_db = librosa.power_to_db(mel, ref=np.max)
-        mel_db = (mel_db - mel_db.min()) / (mel_db.max() - mel_db.min() + 1e-8)
-        return mel_db.astype(np.float32)
+                                                n_fft=1024, hop_length=256, power=2.0)
+        mel_db = librosa.power_to_db(mel, ref=np.max).astype(np.float32)
+    
+        # Нормалізація тепер застосовується ПІСЛЯ переведення в dB
+        if hasattr(self, 'mean') and self.mean is not None:
+            mel_db = (mel_db - self.mean) / (self.std + 1e-8)
+        
+        return mel_db
 
     def __getitem__(self, idx):
         row = self.df.iloc[idx]
@@ -76,14 +80,14 @@ class EmotionVADDataset(data.Dataset):
                 audio = time_shift(audio, shift_max=0.2)
             if random.random() < 0.2:
                 # random pitch between -2 and 2 semitones
-                n_steps = random.uniform(-2, 2)
+                n_steps = random.uniform(-0.5, 0.5)
                 audio = pitch_shift(audio, self.sr, n_steps=n_steps)
             if random.random() < 0.15:
                 rate = random.uniform(0.9, 1.1)
                 audio = time_stretch(audio, rate=rate)
                 # ensure length
                 if len(audio) < self.samples:
-                    audio = np.pad(audio, (0, self.samples - self.samples))
+                    audio = np.pad(audio, (0, self.samples - len(audio)), mode='reflect')
                 else:
                     audio = audio[:self.samples]
 
@@ -91,3 +95,7 @@ class EmotionVADDataset(data.Dataset):
         mel = torch.tensor(mel).unsqueeze(0)  # (1, n_mels, time)
         target = torch.tensor([valence, arousal, dominance], dtype=torch.float32)
         return mel, target
+    
+    def set_stats(self, mean, std):
+        self.mean = mean
+        self.std = std

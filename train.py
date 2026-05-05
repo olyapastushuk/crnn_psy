@@ -1,3 +1,4 @@
+import json
 import os
 import math
 import sys
@@ -17,13 +18,15 @@ from model import EmotionCRNN
 # Config
 CSV_TRAIN = "data/labels_train.csv"
 CSV_VAL = "data/labels_val.csv"
-DEVICE = "cuda"
-BATCH_SIZE = 64
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+BATCH_SIZE = 256
 EPOCHS = 40
-LR = 1e-3
+LR = 2e-4
 WEIGHT_DECAY = 1e-4  # L2 regularization
 CLIP_GRAD_NORM = 5.0
 SAVE_PATH = "emotion_crnn_best.pth"
+W_MSE = 0.2
+W_CCC = 0.8
 
 # Метрики
 def rmse(a, b):
@@ -36,66 +39,101 @@ def pcc(a, b):
     a_mean = torch.mean(a, dim=0)
     b_mean = torch.mean(b, dim=0)
     cov = torch.sum((a - a_mean) * (b - b_mean), dim=0)
-    std_a = torch.sqrt(torch.sum((a - a_mean)**2, dim=0))
+    std_a = torch.sqrt(torch.sum((a - a_mean)**2, dim=0)) + 1e-8
     std_b = torch.sqrt(torch.sum((b - b_mean)**2, dim=0))
     return (cov[0]/(std_a[0]*std_b[0]+1e-8)).item(), (cov[1]/(std_a[1]*std_b[1]+1e-8)).item(), (cov[2]/(std_a[2]*std_b[2]+1e-8)).item()
 
+def ccc_loss(pred, target):
+    # Розрахунок Concordance Correlation Coefficient для батчу
+    eps = 1e-8
+    p_mean = torch.mean(pred, dim=0)
+    t_mean = torch.mean(target, dim=0)
+    
+    p_var = torch.var(pred, dim=0, unbiased=False)
+    t_var = torch.var(target, dim=0, unbiased=False)
+    
+    # Коваріація
+    cov = torch.mean((pred - p_mean) * (target - t_mean), dim=0)
+    
+    ccc = (2 * cov) / (p_var + t_var + torch.pow(p_mean - t_mean, 2) + eps)
+    return 1 - torch.mean(ccc)
+
+# Тренування однієї епохи
 # Тренування однієї епохи
 def train_one_epoch(model, loader, criterion, optimizer, epoch):
     model.train()
     total_loss = 0.0
-    
-    # Додано tqdm для візуалізації прогресу тренування
+    total_samples = 0 # Лічильник оброблених аудіозаписів
+
     pbar = tqdm(loader, desc=f"Epoch {epoch:03d} [Train]", leave=False)
     
     for mel, target in pbar:
         mel, target = mel.to(DEVICE), target.to(DEVICE)
-
         pred = model(mel)
-        loss = criterion(pred, target)
+
+        mse_loss = criterion(pred, target)
+        ccc_val = ccc_loss(pred, target) # ccc_loss вже повертає (1 - CCC)
+        
+        # Комбінований Loss
+        loss = W_MSE * mse_loss + W_CCC * ccc_val   
 
         optimizer.zero_grad()
         loss.backward()
+        
+        # Градієнтний кліппінг (важливо при змішуванні лоссів)
         torch.nn.utils.clip_grad_norm_(model.parameters(), CLIP_GRAD_NORM)
+        
         optimizer.step()
 
-        current_loss = loss.item()
-        total_loss += current_loss * mel.size(0)
+        total_loss += loss.item() * mel.size(0)
+        total_samples += mel.size(0)
         
-        # Оновлення інформації в прогрес-барі
-        pbar.set_postfix({'loss': f"{current_loss:.4f}"})
-        
-    return total_loss / len(loader.dataset)
+    return total_loss / total_samples
 
-# Валідація з MSE, MAE та PCC
+# Валідація
 def validate(model, loader, criterion):
     model.eval()
     total_loss = 0.0
-    total_mae = 0.0
-    y_true_all, y_pred_all = [], []
+    total_samples = 0
+    
+    all_preds, all_targets = [], []
 
-    # Додано tqdm для візуалізації прогресу валідації
     pbar = tqdm(loader, desc="Validating", leave=False)
     
     with torch.no_grad():
         for mel, target in pbar:
             mel, target = mel.to(DEVICE), target.to(DEVICE)
+            batch_size = mel.size(0)
+            
             pred = model(mel)
 
-            loss = criterion(pred, target)
-            total_loss += loss.item() * mel.size(0)
-            total_mae += mae(pred, target) * mel.size(0)
+            all_preds.append(pred.cpu())
+            all_targets.append(target.cpu())
 
-            y_true_all.append(target.cpu())
-            y_pred_all.append(pred.cpu())
-            
-    y_true_all = torch.cat(y_true_all, dim=0)
-    y_pred_all = torch.cat(y_pred_all, dim=0)
+            mse_loss = criterion(pred, target)
+            ccc_val = ccc_loss(pred, target)
+            loss = W_MSE * mse_loss + W_CCC * ccc_val   
+        
+            total_loss += loss.item() * batch_size
+            total_samples += batch_size
 
+    # Об'єднуємо всі результати для розрахунку метрик
+    y_true_all = torch.cat(all_targets, dim=0)
+    y_pred_all = torch.cat(all_preds, dim=0)
+
+    # MAE
+    mae_each = torch.mean(torch.abs(y_true_all - y_pred_all), dim=0)
+    mae_v, mae_a, mae_d = mae_each[0].item(), mae_each[1].item(), mae_each[2].item()
+
+    # PCC
     pcc_val, pcc_aro, pcc_dom = pcc(y_true_all, y_pred_all)
 
-    return total_loss / len(loader.dataset), total_mae / len(loader.dataset), pcc_val, pcc_aro, pcc_dom, y_true_all, y_pred_all
-
+    print(f"Detailed MAE -> V: {mae_v:.4f}, A: {mae_a:.4f}, D: {mae_d:.4f}")
+    
+    # Повертаємо середній loss, розділений на точну кількість зразків
+    final_loss = total_loss / total_samples
+    return (final_loss, mae_each.mean().item(), 
+            pcc_val, pcc_aro, pcc_dom, y_true_all, y_pred_all)
 # Графіки метрик
 def plot_metrics(history, save_path=None):
     plt.figure(figsize=(15,5))
@@ -133,25 +171,69 @@ def plot_metrics(history, save_path=None):
     plt.show()
     plt.close()
 
+def get_stats(loader):
+    print("Calculating dataset stats...")
+
+    total_sum = 0.0
+    total_sq_sum = 0.0
+    total_count = 0
+
+    for mel, _ in tqdm(loader):
+        total_sum += mel.sum().item()
+        total_sq_sum += (mel ** 2).sum().item()
+        total_count += mel.numel()
+
+    mean = total_sum / total_count
+    std = ((total_sq_sum / total_count) - mean**2) ** 0.5
+
+    return mean, std
+
 # Головна функція
 def main():
     os.makedirs('checkpoints', exist_ok=True)
     os.makedirs('logs', exist_ok=True) 
     os.makedirs('plots', exist_ok=True) 
 
+    stats_path = os.path.join('checkpoints', 'dataset_stats.json')
+    
+    # ПЕРЕВІРКА НАЯВНОСТІ ЗБЕРЕЖЕНИХ СТАТИСТИК
+    if os.path.exists(stats_path):
+        print(f"Loading existing stats from {stats_path}...")
+        with open(stats_path, 'r') as f:
+            stats = json.load(f)
+        mean = stats['mean']
+        std = stats['std']
+    else:
+        # ОБЧИСЛЕННЯ, ЯКЩО ФАЙЛУ НЕМАЄ
+        print("Stats file not found. Calculating dataset stats...")
+        stats_ds = EmotionVADDataset(CSV_TRAIN, augment=False)
+        stats_loader = DataLoader(stats_ds, batch_size=BATCH_SIZE, shuffle=False, num_workers=4)
+        mean, std = get_stats(stats_loader)
+        
+        # ЗБЕРЕЖЕННЯ ДЛЯ НАСТУПНИХ ЗАПУСКІВ
+        with open(stats_path, 'w') as f:
+            json.dump({'mean': mean, 'std': std}, f)
+        print(f"Stats saved to {stats_path}")
+
     log_file_path = os.path.join('logs', f'train_log_{datetime.now().strftime("%Y%m%d_%H%M%S")}.csv')
     csv_logs = []
 
-    train_ds = EmotionVADDataset(CSV_TRAIN)
-    val_ds = EmotionVADDataset(CSV_VAL)
+    # 2. ПІДГОТОВКА РОБОЧИХ ДАТАСЕТІВ
+    train_ds = EmotionVADDataset(CSV_TRAIN, augment=True) # Тут аугментація дозволена
+    val_ds = EmotionVADDataset(CSV_VAL, augment=False)
+
+    train_ds.set_stats(mean, std)
+    val_ds.set_stats(mean, std)
 
     train_loader = DataLoader(train_ds, batch_size=BATCH_SIZE, shuffle=True, num_workers=4, pin_memory=True)
     val_loader = DataLoader(val_ds, batch_size=BATCH_SIZE, shuffle=False, num_workers=2, pin_memory=True)
 
     print("Using device:", DEVICE)
 
+    # Ініціалізація моделі та навчання
     model = EmotionCRNN().to(DEVICE)
-    criterion = nn.MSELoss()
+    
+    criterion = nn.MSELoss() 
     optimizer = torch.optim.Adam(model.parameters(), lr=LR, weight_decay=WEIGHT_DECAY)
     scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=3)
 
