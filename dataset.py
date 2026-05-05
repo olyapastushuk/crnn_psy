@@ -57,7 +57,6 @@ class EmotionVADDataset(data.Dataset):
                                                 n_fft=1024, hop_length=256, power=2.0)
         mel_db = librosa.power_to_db(mel, ref=np.max).astype(np.float32)
     
-        # Нормалізація тепер застосовується ПІСЛЯ переведення в dB
         if hasattr(self, 'mean') and self.mean is not None:
             mel_db = (mel_db - self.mean) / (self.std + 1e-8)
         

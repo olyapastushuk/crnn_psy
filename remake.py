@@ -40,14 +40,8 @@ CAMEO_EMOTIONS = [
 def get_data():
     print("--- Етап 1: Завантаження датасету CAMEO ---")
     try:
-        # Завантажуємо без параметрів, які викликають помилку
         ds_dict = load_dataset("amu-cai/CAMEO")
-        
-        # Об'єднуємо корпуси
         full_ds = concatenate_datasets([ds_dict[k] for k in ds_dict.keys()])
-        
-        # ВАЖЛИВИЙ МОМЕНТ: Вимикаємо декодування аудіо через cast_column
-        # Це замінює decode_audio=False і не викликає помилку конфігурації
         full_ds = full_ds.cast_column("audio", Audio(decode=False))
         
         print(f"Успішно зібрано {len(full_ds)} записів.")
@@ -59,29 +53,23 @@ def get_data():
 def save_data(dataset_split, subdir_name):
     print(f"\n--- Етап 2: Обробка {subdir_name} ---")
     rows = []
-    
+
     for i, item in enumerate(dataset_split):
         try:
-            # 1. Отримуємо емоцію (вона вже приходить як рядок, напр. 'happiness')
             emo_raw = item['emotion']
             emo_name = str(emo_raw).lower().strip()
             
-            # Перевіряємо, чи є ця емоція в нашому VAD-словнику
             if emo_name not in emo2vad:
                 continue
                 
             v, a, d = emo2vad[emo_name]
             
-            # 2. Шлях для збереження
             filename = f"{i}_{emo_name}.wav"
             target_subdir = f"audio_{subdir_name}"
             full_path = os.path.join(BASE_AUDIO_DIR, target_subdir, filename)
             
-            # 3. Отримуємо аудіо-контент
-            # Оскільки ми вимкнули decode, беремо сирі байти
             audio_bytes = item['audio']['bytes']
             
-            # 4. Декодуємо через librosa та зберігаємо
             y, sr = librosa.load(io.BytesIO(audio_bytes), sr=16000)
             sf.write(full_path, y, sr)
             
