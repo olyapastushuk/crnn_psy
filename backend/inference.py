@@ -4,7 +4,7 @@ import librosa
 import numpy as np
 import torch.nn as nn
 import webrtcvad
-from model import EmotionCRNN  # Імпортуємо вашу архітектуру
+from backend.model import EmotionCRNN  # Імпортуємо вашу архітектуру
 
 class EmotionPredictor:
     def __init__(self, checkpoint_path, device=None):

@@ -13,7 +13,7 @@ from datetime import datetime
 from tqdm import tqdm  # Додано імпорт tqdm
 
 from dataset import EmotionVADDataset
-from model import EmotionCRNN
+from backend.model import EmotionCRNN
 
 # Config
 CSV_TRAIN = "data/labels_train.csv"
@@ -24,6 +24,7 @@ EPOCHS = 40
 LR = 2e-4
 WEIGHT_DECAY = 1e-4  # L2 regularization
 CLIP_GRAD_NORM = 5.0
+CHECKPOINT_DIR = os.path.join('backend', 'checkpoints')
 SAVE_PATH = "emotion_crnn_best.pth"
 W_MSE = 0.2
 W_CCC = 0.8
@@ -190,11 +191,11 @@ def get_stats(loader):
 
 # Головна функція
 def main():
-    os.makedirs('checkpoints', exist_ok=True)
+    os.makedirs(CHECKPOINT_DIR, exist_ok=True)
     os.makedirs('logs', exist_ok=True) 
     os.makedirs('plots', exist_ok=True) 
 
-    stats_path = os.path.join('checkpoints', 'dataset_stats.json')
+    stats_path = os.path.join(CHECKPOINT_DIR, 'dataset_stats.json')
     
     # ПЕРЕВІРКА НАЯВНОСТІ ЗБЕРЕЖЕНИХ СТАТИСТИК
     if os.path.exists(stats_path):
@@ -281,7 +282,7 @@ def main():
 
         if val_loss < best_val:
             best_val = val_loss
-            torch.save(model.state_dict(), os.path.join('checkpoints', SAVE_PATH))
+            torch.save(model.state_dict(), os.path.join(CHECKPOINT_DIR, SAVE_PATH))
             print(f"  --> Saved best model")
 
         if epoch % 5 == 0:
